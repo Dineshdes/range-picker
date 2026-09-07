@@ -265,9 +265,9 @@ body{
   <!-- right: custom range, typeable -->
   <div class="dd" id="ddRange">
     <div class="rangebox" id="rangebox">
-      <input class="dtin" id="inStart" aria-label="Start date and time" placeholder="dd-mm-yyyy hh:mm" spellcheck="false" autocomplete="off">
+      <input class="dtin" id="inStart" aria-label="Start date and time" placeholder="dd-mm-yyyy hh:mm" inputmode="numeric" spellcheck="false" autocomplete="off">
       <span class="arrowsep">→</span>
-      <input class="dtin" id="inEnd" aria-label="End date and time" placeholder="dd-mm-yyyy hh:mm" spellcheck="false" autocomplete="off">
+      <input class="dtin" id="inEnd" aria-label="End date and time" placeholder="dd-mm-yyyy hh:mm" inputmode="numeric" spellcheck="false" autocomplete="off">
       <button class="calbtn" id="calBtn" aria-label="Open calendar" aria-haspopup="dialog" aria-expanded="false">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
           <rect x="2" y="3" width="12" height="11" rx="2"></rect><path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4"></path>
@@ -296,7 +296,7 @@ body{
     </div>
   </div>
 
-  <div class="hint" id="hint">Type into either field — <span style="color:var(--ink-2)">dd-mm-yyyy hh:mm</span> — or pick a preset and both fields fill in.</div>
+  <div class="hint" id="hint">Type digits only — <span style="color:var(--ink-2)">07092026 0930</span> — separators fill in and the caret jumps ahead. Or pick a preset.</div>
 </div>
 
 <script>
@@ -373,7 +373,7 @@ body{
   }
   function setHint(msg,bad){
     hint.innerHTML = bad ? '<b>'+msg+'</b>'
-      : 'Type into either field — <span style="color:var(--ink-2)">dd-mm-yyyy hh:mm</span> — or pick a preset and both fields fill in.';
+      : 'Type digits only — <span style="color:var(--ink-2)">07092026 0930</span> — separators fill in and the caret jumps ahead. Or pick a preset.';
   }
 
   function commitTyped(which){
@@ -382,8 +382,8 @@ body{
     var d=parseInput(input.value, which==='start'?st.start:st.end);
     if(!d){
       input.classList.add('bad');
-      setHint('Could not read “'+input.value+'”. Use dd-mm-yyyy hh:mm, e.g. 18-08-2026 10:40', true);
-      return;
+      setHint('That date does not exist. Use dd-mm-yyyy hh:mm, e.g. 18-08-2026 10:40', true);
+      return false;
     }
     input.classList.remove('bad');
     setHint('');
@@ -396,20 +396,66 @@ body{
     }
     st.presetId=null;
     renderPreset(); paintInputs(false);
+    if(!popDetail.hidden){syncDrafts();renderStep();}
+    return true;
   }
+
+  /* mask: digits only, separators inserted as you type, jump on complete */
+  function digitsOf(s){return (s||'').replace(/\D/g,'').slice(0,12);}
+  function maskFrom(d){
+    var out=d.slice(0,2);
+    if(d.length>2){out+='-'+d.slice(2,4);}
+    if(d.length>4){out+='-'+d.slice(4,8);}
+    if(d.length>8){out+=' '+d.slice(8,10);}
+    if(d.length>10){out+=':'+d.slice(10,12);}
+    return out;
+  }
+  function maskLen(n){return maskFrom(new Array(n+1).join('0')).length;}
 
   [['start',inStart],['end',inEnd]].forEach(function(pair){
     var which=pair[0], input=pair[1];
+
     input.addEventListener('keydown',function(e){
-      if(e.key==='Enter'){e.preventDefault();commitTyped(which);input.blur();}
+      if(e.key==='Enter'){e.preventDefault();if(commitTyped(which)){input.blur();}}
       if(e.key==='Escape'){paintInputs(false);setHint('');input.blur();}
     });
+
+    input.addEventListener('input',function(){
+      var caret=input.selectionStart;
+      var before=input.value.slice(0,caret).replace(/\D/g,'').length;
+      var d=digitsOf(input.value);
+      input.value=maskFrom(d);
+      var p=maskLen(Math.min(before,d.length));
+      try{input.setSelectionRange(p,p);}catch(err){}
+      input.classList.remove('bad');
+      if(d.length!==12){return;}
+      if(!commitTyped(which)){return;}
+      if(which==='start'){
+        inEnd.focus(); inEnd.select();
+        setHint('');
+      }else{
+        input.blur();
+      }
+    });
+
     input.addEventListener('blur',function(){
       if(input.value.trim()===''){paintInputs(false);setHint('');return;}
       commitTyped(which);
     });
-    input.addEventListener('input',function(){
-      input.classList.remove('bad');
+
+    var justFocused=false;
+    input.addEventListener('focus',function(){
+      justFocused=true;
+      try{input.select();}catch(err){}
+    });
+    input.addEventListener('mouseup',function(e){
+      if(justFocused){e.preventDefault();justFocused=false;}
+    });
+    input.addEventListener('blur',function(){justFocused=false;});
+
+    input.addEventListener('click',function(e){
+      e.stopPropagation();
+      if(popDetail.hidden){openPicker(which==='start'?0:2);}
     });
   });
 
@@ -648,6 +694,22 @@ body{
   }
 
   /* ---------- open / close ---------- */
+  function syncDrafts(){
+    st.sd=st.start?sod(st.start):sod(new Date());
+    st.ed=st.end?sod(st.end):sod(new Date());
+    st.stime=st.start?{h:st.start.getHours(),m:Math.floor(st.start.getMinutes()/5)*5}:{h:0,m:0};
+    st.etime=st.end?{h:st.end.getHours(),m:Math.floor(st.end.getMinutes()/5)*5}:{h:23,m:55};
+  }
+  function openPicker(step){
+    closeAll();
+    syncDrafts();
+    st.step=step||0;
+    st.view=new Date(st.step>=2?(st.ed||st.sd):st.sd);
+    renderStep();
+    popDetail.hidden=false;
+    calBtn.setAttribute('aria-expanded','true');
+    rangebox.classList.add('open');
+  }
   function closeAll(){
     popShort.hidden=true; popDetail.hidden=true;
     tgShort.setAttribute('aria-expanded','false');
@@ -661,16 +723,8 @@ body{
   });
   calBtn.addEventListener('click',function(e){
     e.stopPropagation();
-    var was=!popDetail.hidden; closeAll();
-    if(was){return;}
-    st.sd=st.start?sod(st.start):sod(new Date());
-    st.ed=st.end?sod(st.end):sod(new Date());
-    st.stime=st.start?{h:st.start.getHours(),m:Math.floor(st.start.getMinutes()/5)*5}:{h:0,m:0};
-    st.etime=st.end?{h:st.end.getHours(),m:Math.floor(st.end.getMinutes()/5)*5}:{h:23,m:55};
-    st.view=new Date(st.sd); st.step=0;
-    renderStep();
-    popDetail.hidden=false; calBtn.setAttribute('aria-expanded','true');
-    rangebox.classList.add('open');
+    if(!popDetail.hidden){closeAll();return;}
+    openPicker(0);
   });
   popShort.addEventListener('click',function(e){e.stopPropagation();});
   popDetail.addEventListener('click',function(e){e.stopPropagation();});
